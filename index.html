@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>XR Spinosaurus</title>
+	<meta charset="utf-8">
+	<meta http-equiv="X-UA-Compatible" content="IE=edge">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+
+	<!-- import the webpage's stylesheet -->
+	<link rel="stylesheet" href="./style.css">
+
+	<script>
+		// WebXR requires HTTPS, so the site doesn't work if someone manually enters
+		// the URL and ends up using HTTP. To work around this, force redirect from
+		// http to https for non-localhost addresses.
+		if (window.location.protocol == "http:" &&
+				window.location.hostname != "localhost" &&
+				window.location.hostname != "127.0.0.1" &&
+				window.location.hostname != "[::1]") {
+			//window.location = window.location.href.replace('http:', 'https:');
+		}
+	</script>
+
+	<!-- import the webpage's javascript files -->
+	<script src="https://rawgit.com/aframevr/aframe/master/dist/aframe-master.min.js"></script>
+	<script src="https://unpkg.com/aframe-extras@3.3.0/dist/aframe-extras.min.js"></script>
+	<script
+			src="https://unpkg.com/aframe-environment-component@1.1.0/dist/aframe-environment-component.min.js"></script>
+
+	<script>
+		// Define a few custom components useful for AR mode. While these are somewhat reusable,
+		// I recommend checking if there are officially supported alternatives before copying
+		// these into new projects.
+
+		// See also https://github.com/aframevr/aframe/pull/4356
+		AFRAME.registerComponent('hide-in-ar-mode', {
+			// Set this object invisible while in AR mode.
+			init: function () {
+				this.el.sceneEl.addEventListener('enter-vr', (ev) => {
+					this.wasVisible = this.el.getAttribute('visible');
+					if (this.el.sceneEl.is('ar-mode')) {
+						this.el.setAttribute('visible', false);
+					}
+				});
+				this.el.sceneEl.addEventListener('exit-vr', (ev) => {
+					if (this.wasVisible) this.el.setAttribute('visible', true);
+				});
+			}
+		});
+
+		AFRAME.registerComponent('ar-shadows', {
+			// Swap an object's material to a transparent shadows-only material while
+			// in AR mode. Intended for use with a ground plane. The object is also
+			// set visible while in AR mode, this is useful if it's hidden in other
+			// modes due to them using a 3D environment.
+			schema: {
+				opacity: {default: 0.3}
+			},
+			init: function () {
+				this.el.sceneEl.addEventListener('enter-vr', (ev) => {
+					this.wasVisible = this.el.getAttribute('visible');
+					if (this.el.sceneEl.is('ar-mode')) {
+						this.savedMaterial = this.el.object3D.children[0].material;
+						this.el.object3D.children[0].material = new THREE.ShadowMaterial();
+						this.el.object3D.children[0].material.opacity = this.data.opacity;
+						this.el.setAttribute('visible', true);
+					}
+				});
+				this.el.sceneEl.addEventListener('exit-vr', (ev) => {
+					if (this.savedMaterial) {
+						this.el.object3D.children[0].material = this.savedMaterial;
+						this.savedMaterial = null;
+					}
+					if (!this.wasVisible) this.el.setAttribute('visible', false);
+				});
+			}
+		});
+
+		AFRAME.registerComponent('ar-hit-test', {
+			init: function () {
+				this.xrHitTestSource = null;
+				this.viewerSpace = null;
+				this.refSpace = null;
+
+				this.el.sceneEl.renderer.xr.addEventListener('sessionend', (ev) => {
+					this.viewerSpace = null;
+					this.refSpace = null;
+					this.xrHitTestSource = null;
+				});
+				this.el.sceneEl.renderer.xr.addEventListener('sessionstart', (ev) => {
+					let session = this.el.sceneEl.renderer.xr.getSession();
+
+					let element = this.el;
+					session.addEventListener('select', function () {
+						let position = element.getAttribute('position');
+
+						document.getElementById('painting').setAttribute('position', position);
+						document.getElementById('light').setAttribute('position', {
+							x: (position.x - 2),
+							y: (position.y + 4),
+							z: (position.z + 2)
+						});
+					});
+
+					session.requestReferenceSpace('viewer').then((space) => {
+						this.viewerSpace = space;
+						session.requestHitTestSource({space: this.viewerSpace})
+								.then((hitTestSource) => {
+									this.xrHitTestSource = hitTestSource;
+								});
+					});
+
+					session.requestReferenceSpace('local-floor').then((space) => {
+						this.refSpace = space;
+					});
+				});
+			},
+			tick: function () {
+				if (this.el.sceneEl.is('ar-mode')) {
+					if (!this.viewerSpace) return;
+
+					let frame = this.el.sceneEl.frame;
+					let xrViewerPose = frame.getViewerPose(this.refSpace);
+
+					if (this.xrHitTestSource && xrViewerPose) {
+						let hitTestResults = frame.getHitTestResults(this.xrHitTestSource);
+						if (hitTestResults.length > 0) {
+							let pose = hitTestResults[0].getPose(this.refSpace);
+
+							let inputMat = new THREE.Matrix4();
+							inputMat.fromArray(pose.transform.matrix);
+
+							let position = new THREE.Vector3();
+							position.setFromMatrixPosition(inputMat);
+							this.el.setAttribute('position', position);
+
+							let rotation = new THREE.Quaternion();
+							rotation.setFromRotationMatrix(inputMat);
+							this.el.object3D.quaternion = rotation;
+						}
+					}
+				}
+			}
+		});
+
+	</script>
+</head>
+<body>
+
+<a-scene webxr="requiredFeatures: hit-test,local-floor;">
+	
+	<a-camera position="0 1.2 0"></a-camera>
+
+	<a-entity id="painting" position="0 0 -3" scale="0.5 0.5 0.1" ar-hit-test>
+		      <a-box position="0 2 0" rotation="0 0 0" color="#4CC3D9"></a-box>
+
+	</a-entity>
+
+	<a-entity light="type: hemisphere; intensity: 1"></a-entity>
+	<a-light type="directional"
+			 light="castShadow: true;
+                      shadowMapHeight: 1024;
+                      shadowMapWidth: 1024;
+                      shadowCameraLeft: -7;
+                      shadowCameraRight: 5;
+                      shadowCameraBottom: -5;
+                      shadowCameraTop: 5;"
+			 id="light"
+			 target="painting"
+			 position="-2 4 2">
+	</a-light>
+</a-scene>
+
+<div id="text">
+	<h1>Toffe ervaring</h1>
+	<p>Tik op AR onderin om te starten. Kijk vervolgens naar een muur</p>
+</div>
+</body>
+</html>1
